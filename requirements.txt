@@ -1,0 +1,22 @@
+# ErosGest AI — Dependências
+# Instale com: pip install -r requirements.txt
+
+# Core (obrigatório)
+Pillow>=10.0.0
+
+# Build do EXE (obrigatório para gerar .exe)
+pyinstaller>=6.0.0
+
+# IA e APIs (necessário para o assistente IA)
+# Configure as chaves na aba Configurações do programa
+# OpenAI: https://platform.openai.com/api-keys
+# SerpAPI: https://serpapi.com/manage-api-key
+
+# Voz/STT (opcional - habilita captura por microfone)
+SpeechRecognition>=3.10.0
+# PyAudio>=0.2.14  # Instalar separado: pip install pyaudio
+# Ou para Windows: pip install pipwin && pipwin install pyaudio
+
+# Análise de dados (opcional - para projeções)
+# prophet>=1.1.4
+# pandas>=2.0.0
