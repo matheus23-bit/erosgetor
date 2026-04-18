@@ -1,7 +1,10 @@
 """
 ErosGest AI v2 — Database com sistema de usuários e permissões
 """
-import sqlite3, os, json, logging
+import sqlite3
+import json
+import logging
+import base64
 from datetime import datetime
 from contextlib import contextmanager
 from pathlib import Path
@@ -175,8 +178,13 @@ def get_all_config():
         return {r[0]:r[1] for r in c.execute("SELECT key,value FROM config").fetchall()}
 
 def add_product(name, cost_price, sale_price, quantity, category="",
-                supplier="", ean="", unit="un", notes="", image_url="", product_url=""):
+                supplier="", ean="", unit="un", notes="", image_url="", product_url="", image_data=None):
     with get_connection() as c:
+        # Se image_data (bytes) for fornecido, codifica para base64 e salva
+        if image_data:
+            import base64
+            image_url = "data:image/png;base64," + base64.b64encode(image_data).decode('utf-8')
+        
         cur=c.execute("""INSERT INTO products(name,ean,category,supplier,cost_price,sale_price,
             quantity,unit,notes,image_url,product_url) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
             (name,ean,category,supplier,cost_price,sale_price,quantity,unit,notes,image_url,product_url))
@@ -184,7 +192,7 @@ def add_product(name, cost_price, sale_price, quantity, category="",
 
 def update_product(pid, **kw):
     allowed={"name","ean","category","supplier","cost_price","sale_price",
-             "quantity","unit","notes","active","min_quantity"}
+             "quantity","unit","notes","active","min_quantity","image_url","product_url"}
     kw={k:v for k,v in kw.items() if k in allowed}
     if not kw: return
     kw["updated_at"]=datetime.now().isoformat()

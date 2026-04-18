@@ -352,7 +352,7 @@ class GamificationWorker:
         while self.running:
             try:
                 from database.db import get_recent_milestones
-                milestones = get_recent_milestones(hours=0.1)  # últimos 6 minutos
+                milestones = get_recent_milestones(minutes=6)  # últimos 6 minutos
                 for m in milestones:
                     key = f"{m['milestone_type']}_{m['milestone_value']}_{m['achieved_at'][:10]}"
                     if key not in self.notified_milestones:

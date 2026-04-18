@@ -6,13 +6,10 @@ STT via SpeechRecognition (offline) ou AssemblyAI (online)
 import json
 import logging
 import re
-import os
 import sys
 import urllib.request
 import urllib.parse
 import urllib.error
-import threading
-from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -152,27 +149,67 @@ def parse_ai_response(response_text: str) -> dict:
     Analisa a resposta da IA e extrai ação estruturada se houver
     Retorna: {"type": "action"|"text", "action": str, "data": dict, "text": str}
     """
+    if not response_text or not isinstance(response_text, str):
+        return {"type": "text", "text": "Resposta vazia ou inválida da IA."}
+    
     text = response_text.strip()
 
-    # Tenta extrair JSON de ação
-    json_pattern = r'\{[^{}]*"action"[^{}]*\}'
-    matches = re.findall(json_pattern, text, re.DOTALL)
-
-    for match in matches:
-        try:
-            parsed = json.loads(match)
-            if "action" in parsed:
-                # Remove o JSON do texto de exibição
-                display_text = text.replace(match, "").strip()
+    # Tenta encontrar JSON com action - padrão mais flexível
+    try:
+        # Primeiro tenta parsear o texto inteiro como JSON
+        parsed = json.loads(text)
+        if isinstance(parsed, dict) and "action" in parsed:
+            data_val = parsed.get("data")
+            if not isinstance(data_val, dict):
+                data_val = {}
+            action_val = parsed.get("action")
+            if action_val and isinstance(action_val, str):
                 return {
                     "type": "action",
-                    "action": parsed["action"],
-                    "data": parsed.get("data", {}),
-                    "text": display_text or f"Executando: {parsed['action']}"
+                    "action": action_val,
+                    "data": data_val,
+                    "text": f"Executando: {action_val}"
                 }
-        except json.JSONDecodeError:
-            continue
+    except (json.JSONDecodeError, TypeError, KeyError, ValueError):
+        pass
 
+    # Tenta extrair JSON de dentro do texto (padrão mais abrangente)
+    # Procura por { seguido de conteúdo até } correspondente
+    start = text.find('{')
+    if start != -1:
+        # Encontra o fechamento correspondente
+        depth = 0
+        end = -1
+        for i in range(start, len(text)):
+            if text[i] == '{':
+                depth += 1
+            elif text[i] == '}':
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        
+        if end != -1:
+            json_str = text[start:end]
+            try:
+                parsed = json.loads(json_str)
+                if isinstance(parsed, dict) and "action" in parsed:
+                    data_val = parsed.get("data")
+                    if not isinstance(data_val, dict):
+                        data_val = {}
+                    action_val = parsed.get("action")
+                    if action_val and isinstance(action_val, str):
+                        display_text = (text[:start] + text[end:]).strip()
+                        return {
+                            "type": "action",
+                            "action": action_val,
+                            "data": data_val,
+                            "text": display_text or f"Executando: {action_val}"
+                        }
+            except (json.JSONDecodeError, TypeError, KeyError, ValueError):
+                pass
+
+    # Se não encontrou ação válida, retorna como texto normal
     return {"type": "text", "text": text}
 
 
