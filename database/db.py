@@ -1,7 +1,10 @@
 """
 ErosGest AI v2 — Database com sistema de usuários e permissões
 """
-import sqlite3, os, json, logging
+import sqlite3
+import json
+import logging
+import base64
 from datetime import datetime
 from contextlib import contextmanager
 from pathlib import Path
@@ -175,8 +178,13 @@ def get_all_config():
         return {r[0]:r[1] for r in c.execute("SELECT key,value FROM config").fetchall()}
 
 def add_product(name, cost_price, sale_price, quantity, category="",
-                supplier="", ean="", unit="un", notes="", image_url="", product_url=""):
+                supplier="", ean="", unit="un", notes="", image_url="", product_url="", image_data=None):
     with get_connection() as c:
+        # Se image_data (bytes) for fornecido, codifica para base64 e salva
+        if image_data:
+            import base64
+            image_url = "data:image/png;base64," + base64.b64encode(image_data).decode('utf-8')
+        
         cur=c.execute("""INSERT INTO products(name,ean,category,supplier,cost_price,sale_price,
             quantity,unit,notes,image_url,product_url) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
             (name,ean,category,supplier,cost_price,sale_price,quantity,unit,notes,image_url,product_url))
@@ -184,7 +192,7 @@ def add_product(name, cost_price, sale_price, quantity, category="",
 
 def update_product(pid, **kw):
     allowed={"name","ean","category","supplier","cost_price","sale_price",
-             "quantity","unit","notes","active","min_quantity"}
+             "quantity","unit","notes","active","min_quantity","image_url","product_url"}
     kw={k:v for k,v in kw.items() if k in allowed}
     if not kw: return
     kw["updated_at"]=datetime.now().isoformat()
@@ -272,3 +280,47 @@ def get_recent_milestones(minutes=5):
         return [dict(r) for r in c.execute("""SELECT * FROM gamification
             WHERE achieved_at>=datetime('now',?) ORDER BY achieved_at DESC""",
             (f"-{minutes} minutes",)).fetchall()]
+
+def get_products_needing_price_update(limit=10):
+    """Retorna produtos que precisam de atualização de preço (última atualização > 24h ou nunca atualizados)"""
+    with get_connection() as c:
+        # Produtos sem histórico de preço ou com última atualização há mais de 24 horas
+        query = """
+        SELECT p.* FROM products p
+        LEFT JOIN price_history ph ON p.id = ph.product_id
+        WHERE p.active = 1 
+        AND (ph.captured_at IS NULL OR ph.captured_at < datetime('now', '-24 hours'))
+        GROUP BY p.id
+        ORDER BY COALESCE(ph.captured_at, '1900-01-01') ASC
+        LIMIT ?
+        """
+        return [dict(r) for r in c.execute(query, (limit,)).fetchall()]
+
+def update_product_price_info(product_id, source, price, url):
+    """Atualiza informações de preço de um produto e registra no histórico"""
+    if not price or price <= 0:
+        return False
+    
+    with get_connection() as c:
+        # Atualiza o preço de custo se for menor que o atual
+        current = c.execute("SELECT cost_price FROM products WHERE id=?", (product_id,)).fetchone()
+        if current and price < current["cost_price"]:
+            c.execute("UPDATE products SET cost_price=?, updated_at=? WHERE id=?", 
+                     (price, datetime.now().isoformat(), product_id))
+        
+        # Registra no histórico de preços
+        c.execute("""INSERT INTO price_history(product_id, source, price, url, captured_at) 
+                    VALUES(?, ?, ?, ?, ?)""",
+                 (product_id, source, price, url, datetime.now().isoformat()))
+        
+        return True
+
+def get_price_history(product_id, limit=10):
+    """Retorna histórico de preços de um produto"""
+    with get_connection() as c:
+        return [dict(r) for r in c.execute("""
+            SELECT * FROM price_history 
+            WHERE product_id=? 
+            ORDER BY captured_at DESC 
+            LIMIT ?
+        """, (product_id, limit)).fetchall()]

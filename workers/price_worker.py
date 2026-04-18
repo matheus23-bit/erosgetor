@@ -234,17 +234,18 @@ class PriceWorker:
                 elapsed += 10
 
     def _execute_run(self):
-        from database.db import get_products, get_config, get_connection
+        from database.db import get_products_needing_price_update, get_config
         
         self.last_run = datetime.now()
         self.stats["runs"] += 1
         logger.info(f"PriceWorker: Iniciando ciclo #{self.stats['runs']}")
 
         serpapi_key = get_config("serpapi_key", "")
-        products = get_products(active_only=True)
+        # Usa a nova função para pegar apenas produtos que precisam de atualização
+        products = get_products_needing_price_update(limit=20)
         
         if not products:
-            logger.info("Nenhum produto ativo para atualizar")
+            logger.info("Nenhum produto precisa de atualização de preço no momento")
             return
 
         updated = 0
@@ -269,7 +270,7 @@ class PriceWorker:
             })
 
     def _update_product_prices(self, product, serpapi_key):
-        from database.db import get_connection
+        from database.db import update_product_price_info
 
         product_name = product["name"]
         market_prices = []
@@ -298,13 +299,19 @@ class PriceWorker:
         if not market_prices:
             return
 
-        # Salva histórico de preços
-        with get_connection() as conn:
-            for p in market_prices[:3]:  # top 3 fontes
-                conn.execute("""
-                    INSERT INTO price_history (product_id, source, price, url)
-                    VALUES (?, ?, ?, ?)
-                """, (product["id"], p["source"], p["price"], p.get("url", "")))
+        # Salva o melhor preço encontrado usando a nova função
+        best_price = None
+        best_source = None
+        best_url = None
+        
+        for p in market_prices:
+            if p["price"] > 0 and (best_price is None or p["price"] < best_price):
+                best_price = p["price"]
+                best_source = p["source"]
+                best_url = p.get("url", "")
+        
+        if best_price:
+            update_product_price_info(product["id"], best_source, best_price, best_url)
 
         # Calcula preço sugerido
         tax_rate = 0.04
@@ -352,7 +359,7 @@ class GamificationWorker:
         while self.running:
             try:
                 from database.db import get_recent_milestones
-                milestones = get_recent_milestones(hours=0.1)  # últimos 6 minutos
+                milestones = get_recent_milestones(minutes=6)  # últimos 6 minutos
                 for m in milestones:
                     key = f"{m['milestone_type']}_{m['milestone_value']}_{m['achieved_at'][:10]}"
                     if key not in self.notified_milestones:

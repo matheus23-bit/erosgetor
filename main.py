@@ -3,14 +3,11 @@ ErosGest AI — Gestão Inteligente para Revendedores
 Interface principal com tkinter
 """
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox
 import threading
 import queue
-import json
-import os
 import sys
 import logging
-import time
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -521,9 +518,10 @@ class ProductDialog(tk.Toplevel):
         self.on_save = on_save
         self.title("Editar Produto" if product else "Novo Produto")
         self.configure(bg=COLORS["bg_dark"])
-        self.geometry("500x560")
+        self.geometry("550x620")
         self.resizable(False, False)
         self.grab_set()
+        self.image_path = None
         self._build()
 
     def _build(self):
@@ -571,10 +569,36 @@ class ProductDialog(tk.Toplevel):
         tk.Label(form, text="Observações", font=FONTS["small"], bg=COLORS["bg_dark"],
                  fg=COLORS["text_muted"]).grid(row=9, column=0, columnspan=2, sticky="w", pady=(8, 2))
         self.e_notes = tk.Text(form, bg=COLORS["input_bg"], fg=COLORS["text_bright"],
-                                font=FONTS["body"], height=3, relief="flat", bd=0)
+                                font=FONTS["body"], height=2, relief="flat", bd=0)
         self.e_notes.grid(row=10, column=0, columnspan=2, sticky="ew", ipady=4, ipadx=8)
         if p.get("notes"):
             self.e_notes.insert("1.0", p["notes"])
+
+        # Seção de imagem
+        img_frame = tk.Frame(form, bg=COLORS["bg_dark"])
+        img_frame.grid(row=11, column=0, columnspan=2, pady=(12, 0), sticky="ew")
+        
+        tk.Label(img_frame, text="Foto do Produto", font=FONTS["small"], bg=COLORS["bg_dark"],
+                 fg=COLORS["text_muted"]).pack(anchor="w", pady=(8, 4))
+        
+        btn_img_frame = tk.Frame(img_frame, bg=COLORS["bg_dark"])
+        btn_img_frame.pack(fill="x")
+        
+        ttk.Button(btn_img_frame, text="📷 Selecionar Foto", style="Ghost.TButton",
+                   command=self._select_image).pack(side="left")
+        
+        self.lbl_image_status = tk.Label(btn_img_frame, text="", font=FONTS["small"],
+                                          bg=COLORS["bg_dark"], fg=COLORS["text_muted"])
+        self.lbl_image_status.pack(side="left", padx=(10, 0))
+        
+        # Preview da imagem (se existir)
+        self.lbl_preview = tk.Label(img_frame, bg=COLORS["bg_dark"], fg=COLORS["text_muted"],
+                                     font=FONTS["small"])
+        self.lbl_preview.pack(anchor="w", pady=(4, 0))
+        
+        if p.get("image_url"):
+            self.lbl_image_status.config(text="✓ Imagem salva")
+            self.lbl_preview.config(text="Imagem já cadastrada")
 
         # Botões
         btn_frame = tk.Frame(self, bg=COLORS["bg_dark"])
@@ -588,6 +612,18 @@ class ProductDialog(tk.Toplevel):
                    command=self.destroy).pack(side="right", padx=(8, 0))
         ttk.Button(btn_frame, text="💾 Salvar", style="Accent.TButton",
                    command=self._save).pack(side="right")
+
+    def _select_image(self):
+        from tkinter import filedialog
+        file_path = filedialog.askopenfilename(
+            title="Selecionar foto do produto",
+            filetypes=[("Imagens", "*.png *.jpg *.jpeg *.gif *.bmp"), ("Todos os arquivos", "*.*")]
+        )
+        if file_path:
+            self.image_path = file_path
+            filename = file_path.split("/")[-1]
+            self.lbl_image_status.config(text=f"✓ {filename}")
+            self.lbl_preview.config(text="Foto selecionada - será salva com o produto")
 
     def _save(self):
         name = self.e_name.get().strip()
@@ -613,22 +649,39 @@ class ProductDialog(tk.Toplevel):
             price = round(cost * 1.35, 2)
 
         notes = self.e_notes.get("1.0", tk.END).strip()
+        
+        # Carregar imagem se selecionada
+        image_data = None
+        if self.image_path:
+            try:
+                with open(self.image_path, "rb") as f:
+                    image_data = f.read()
+            except Exception as e:
+                messagebox.showwarning("Aviso", f"Não foi possível carregar a imagem: {e}")
 
         try:
             from database.db import add_product, update_product
             if self.product:
-                update_product(self.product["id"],
-                    name=name, quantity=qty, cost_price=cost, sale_price=price,
-                    category=self.cat_var.get(), supplier=self.e_supplier.get().strip(),
-                    ean=self.e_ean.get().strip(), unit=self.e_unit.get().strip() or "un",
-                    notes=notes, min_quantity=min_qty)
+                update_kwargs = {
+                    "name": name, "quantity": qty, "cost_price": cost, "sale_price": price,
+                    "category": self.cat_var.get(), "supplier": self.e_supplier.get().strip(),
+                    "ean": self.e_ean.get().strip(), "unit": self.e_unit.get().strip() or "un",
+                    "notes": notes, "min_quantity": min_qty
+                }
+                # Se nova imagem foi selecionada, atualiza também
+                if image_data:
+                    from database.db import get_connection
+                    import base64
+                    image_url = "data:image/png;base64," + base64.b64encode(image_data).decode('utf-8')
+                    update_kwargs["image_url"] = image_url
+                update_product(self.product["id"], **update_kwargs)
             else:
                 add_product(name=name, cost_price=cost, sale_price=price,
                             quantity=qty, category=self.cat_var.get(),
                             supplier=self.e_supplier.get().strip(),
                             ean=self.e_ean.get().strip(),
                             unit=self.e_unit.get().strip() or "un",
-                            notes=notes)
+                            notes=notes, image_data=image_data)
 
             if self.on_save:
                 self.on_save()
@@ -930,14 +983,13 @@ class AssistantTab(tk.Frame):
 
     def _append_message(self, sender, text, tag="assistant"):
         self.chat_text.configure(state="normal")
-        timestamp = datetime.now().strftime("%H:%M")
 
         if sender == "você":
-            self.chat_text.insert(tk.END, f"\n[{timestamp}] Você: ", "user")
+            self.chat_text.insert(tk.END, f"Você: ", "user")
         elif sender == "sistema":
-            self.chat_text.insert(tk.END, f"\n[{timestamp}] Sistema: ", "system")
+            self.chat_text.insert(tk.END, f"Sistema: ", "system")
         else:
-            self.chat_text.insert(tk.END, f"\n[{timestamp}] ErosGest AI: ", "user")
+            self.chat_text.insert(tk.END, f"ErosGest AI: ", "user")
 
         self.chat_text.insert(tk.END, text + "\n", tag)
         self.chat_text.configure(state="disabled")
@@ -980,6 +1032,7 @@ class AssistantTab(tk.Frame):
             response = call_openai_chat(
                 self._history[-8:],
                 api_key,
+                model="gpt-4o-mini",
                 system_prompt=system_prompt
             )
 
@@ -1082,8 +1135,9 @@ class AssistantTab(tk.Frame):
 
     def _capture_voice(self):
         try:
-            from modules.ai_assistant import capture_voice
-            result = capture_voice(timeout=7)
+            from modules.ai_assistant import VoiceCapture
+            vc = VoiceCapture()
+            result = vc.capture_once(timeout=7)
             def done():
                 self._voice_active = False
                 self.voice_btn.configure(text="🎤")
@@ -1270,6 +1324,35 @@ class SettingsTab(tk.Frame):
         tk.Label(self, text="⚙️ Configurações", font=FONTS["title"],
                  bg=COLORS["bg_dark"], fg=COLORS["text_bright"]).pack(padx=24, pady=(20, 16), anchor="w")
 
+        # Seção de Tema
+        theme_frame = tk.LabelFrame(self, text="🎨 Aparência",
+                                     bg=COLORS["bg_card"], fg=COLORS["text_bright"],
+                                     font=FONTS["sub"], bd=1, relief="solid",
+                                     labelanchor="nw")
+        theme_frame.pack(fill="x", padx=24, pady=(0, 12))
+        theme_frame.configure(highlightbackground=COLORS["border"])
+
+        theme_row = tk.Frame(theme_frame, bg=COLORS["bg_card"])
+        theme_row.pack(fill="x", padx=16, pady=12)
+        
+        tk.Label(theme_row, text="Tema Atual:", font=FONTS["small"],
+                 bg=COLORS["bg_card"], fg=COLORS["text_muted"],
+                 width=20, anchor="w").pack(side="left")
+        
+        self.theme_label = tk.Label(theme_row, text="🌙 Escuro (Padrão)", 
+                                     font=FONTS["sub"], bg=COLORS["bg_card"],
+                                     fg=COLORS["accent_light"])
+        self.theme_label.pack(side="left", padx=10)
+        
+        ttk.Button(theme_row, text="☀️ Alternar para Claro", 
+                   style="Ghost.TButton", command=self._toggle_theme).pack(side="left")
+        
+        # Carrega tema atual do banco
+        from database.db import get_config
+        current_theme = get_config("theme") or "dark"
+        if current_theme == "light":
+            self.theme_label.config(text="☀️ Claro")
+
         canvas = tk.Canvas(self, bg=COLORS["bg_dark"], highlightthickness=0)
         scrollbar = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
         scroll_frame = tk.Frame(canvas, bg=COLORS["bg_dark"])
@@ -1331,6 +1414,34 @@ class SettingsTab(tk.Frame):
 
         ttk.Button(scroll_frame, text="💾 Salvar Configurações",
                    style="Accent.TButton", command=self._save).pack(pady=20)
+
+    def _toggle_theme(self):
+        """Alterna entre tema escuro (padrão) e claro"""
+        from database.db import get_config, set_config
+        
+        current_theme = get_config("theme") or "dark"
+        new_theme = "light" if current_theme == "dark" else "dark"
+        
+        # Salva no banco
+        set_config("theme", new_theme)
+        
+        # Aplica o novo tema
+        apply_theme(new_theme)
+        setup_style()
+        
+        # Atualiza label do tema
+        if new_theme == "dark":
+            self.theme_label.config(text="🌙 Escuro (Padrão)", fg=COLORS["accent_light"])
+            # Atualiza texto do botão em todas as instâncias seria ideal, 
+            # mas como só temos um SettingsTab ativo, atualizamos via recriação
+        else:
+            self.theme_label.config(text="☀️ Claro", fg=COLORS["accent_light"])
+        
+        # Atualiza toda a UI
+        self.app._apply_current_theme()
+        
+        messagebox.showinfo("✅ Tema Alterado", 
+                          f"Tema {new_theme} aplicado com sucesso!\nO tema escuro é o padrão.")
 
     def _save(self):
         try:
@@ -1536,7 +1647,7 @@ class ErosGestApp(tk.Tk):
     def _check_gamification_bg(self):
         try:
             from database.db import get_recent_milestones
-            milestones = get_recent_milestones(hours=0.05)  # últimos 3 min
+            milestones = get_recent_milestones(minutes=3)  # últimos 3 min
             for m in milestones:
                 self._event_queue.put(("gamification", m))
         except Exception:
@@ -1547,6 +1658,40 @@ class ErosGestApp(tk.Tk):
         for name, tab in self._tabs.items():
             if hasattr(tab, "refresh"):
                 tab.refresh()
+
+    def _apply_current_theme(self):
+        """Aplica o tema atual a todos os widgets da aplicação"""
+        from database.db import get_config
+        
+        # Carrega tema do banco ou usa padrão escuro
+        theme_name = get_config("theme") or "dark"
+        apply_theme(theme_name)
+        setup_style()
+        
+        # Atualiza cores de fundo da janela principal
+        self.configure(bg=COLORS["bg_dark"])
+        
+        # Atualiza sidebar
+        for widget in self.winfo_children():
+            if isinstance(widget, tk.Frame):
+                self._update_widget_colors(widget)
+        
+        # Refresh nas tabs para aplicar novas cores
+        self.refresh_all()
+
+    def _update_widget_colors(self, container):
+        """Atualiza recursivamente as cores dos widgets"""
+        try:
+            if hasattr(container, 'configure'):
+                # Tenta atualizar background se for um widget que suporta
+                if isinstance(container, (tk.Frame, tk.LabelFrame)):
+                    container.configure(bg=COLORS["bg_card"] if container.cget('bg') != COLORS["bg_dark"] else COLORS["bg_dark"])
+            
+            # Recursão para filhos
+            for child in container.winfo_children():
+                self._update_widget_colors(child)
+        except Exception:
+            pass  # Ignora erros em widgets que não suportam certas configurações
 
     def on_close(self):
         self._price_worker.stop()
