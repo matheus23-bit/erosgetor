@@ -280,3 +280,47 @@ def get_recent_milestones(minutes=5):
         return [dict(r) for r in c.execute("""SELECT * FROM gamification
             WHERE achieved_at>=datetime('now',?) ORDER BY achieved_at DESC""",
             (f"-{minutes} minutes",)).fetchall()]
+
+def get_products_needing_price_update(limit=10):
+    """Retorna produtos que precisam de atualização de preço (última atualização > 24h ou nunca atualizados)"""
+    with get_connection() as c:
+        # Produtos sem histórico de preço ou com última atualização há mais de 24 horas
+        query = """
+        SELECT p.* FROM products p
+        LEFT JOIN price_history ph ON p.id = ph.product_id
+        WHERE p.active = 1 
+        AND (ph.captured_at IS NULL OR ph.captured_at < datetime('now', '-24 hours'))
+        GROUP BY p.id
+        ORDER BY COALESCE(ph.captured_at, '1900-01-01') ASC
+        LIMIT ?
+        """
+        return [dict(r) for r in c.execute(query, (limit,)).fetchall()]
+
+def update_product_price_info(product_id, source, price, url):
+    """Atualiza informações de preço de um produto e registra no histórico"""
+    if not price or price <= 0:
+        return False
+    
+    with get_connection() as c:
+        # Atualiza o preço de custo se for menor que o atual
+        current = c.execute("SELECT cost_price FROM products WHERE id=?", (product_id,)).fetchone()
+        if current and price < current["cost_price"]:
+            c.execute("UPDATE products SET cost_price=?, updated_at=? WHERE id=?", 
+                     (price, datetime.now().isoformat(), product_id))
+        
+        # Registra no histórico de preços
+        c.execute("""INSERT INTO price_history(product_id, source, price, url, captured_at) 
+                    VALUES(?, ?, ?, ?, ?)""",
+                 (product_id, source, price, url, datetime.now().isoformat()))
+        
+        return True
+
+def get_price_history(product_id, limit=10):
+    """Retorna histórico de preços de um produto"""
+    with get_connection() as c:
+        return [dict(r) for r in c.execute("""
+            SELECT * FROM price_history 
+            WHERE product_id=? 
+            ORDER BY captured_at DESC 
+            LIMIT ?
+        """, (product_id, limit)).fetchall()]
