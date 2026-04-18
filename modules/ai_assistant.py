@@ -63,17 +63,25 @@ def call_openai_chat(messages, api_key, model="gpt-4o-mini", max_tokens=1000, sy
         raise RuntimeError(f"Sem conexão com OpenAI: {e.reason}")
 
 
-def call_gemini_chat(message, api_key, model="gemini-1.5-flash"):
+def call_gemini_chat(message, api_key, model="gemini-1.5-flash", image_data=None):
     """
-    Fallback: Google Gemini API
+    Google Gemini API com suporte a imagens
     https://ai.google.dev/api
     """
     if not api_key:
         raise ValueError("Gemini API Key não configurada.")
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    
+    # Constrói o conteúdo da mensagem (texto + imagem opcional)
+    parts = []
+    if image_data:
+        # Imagem em base64
+        parts.append({"inline_data": {"mime_type": "image/png", "data": image_data}})
+    parts.append({"text": message})
+    
     payload = json.dumps({
-        "contents": [{"parts": [{"text": message}]}],
+        "contents": [{"parts": parts}],
         "generationConfig": {"temperature": 0.3, "maxOutputTokens": 1000}
     }).encode("utf-8")
 
@@ -84,7 +92,8 @@ def call_gemini_chat(message, api_key, model="gemini-1.5-flash"):
             data = json.loads(resp.read().decode())
             return data["candidates"][0]["content"]["parts"][0]["text"]
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"Gemini API erro {e.code}: {e.read().decode()}")
+        error_body = e.read().decode()
+        raise RuntimeError(f"Gemini API erro {e.code}: {error_body}")
 
 
 SYSTEM_PROMPT_TEMPLATE = """Você é o assistente ErosGest AI, especializado em gestão de revendas.

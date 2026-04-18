@@ -1003,30 +1003,73 @@ class AssistantTab(tk.Frame):
         self._append_message("você", text, "assistant")
         threading.Thread(target=self._process_message, args=(text,), daemon=True).start()
 
-    def _process_message(self, text):
+    def _process_message(self, text, image_data=None):
         try:
             from database.db import get_config, get_products, get_financial_summary, get_all_config
-            from modules.ai_assistant import (call_openai_chat, build_context_prompt,
+            from modules.ai_assistant import (call_openai_chat, call_gemini_chat, build_context_prompt,
                                                parse_ai_response, parse_product_from_text)
 
-            api_key = self.api_entry.get().strip() or get_config("openai_api_key", "")
+            openai_key = get_config("openai_api_key", "")
+            gemini_key = get_config("gemini_api_key", "")
             config = get_all_config()
             products = get_products(active_only=True)
             financials = get_financial_summary(30)
 
             system_prompt = build_context_prompt(config, products, financials)
+            
+            # Se tiver imagem, usa Gemini (que suporta visão)
+            if image_data and gemini_key:
+                self._history.append({"role": "user", "content": text + " [imagem anexada]"})
+                try:
+                    response = call_gemini_chat(
+                        f"{system_prompt}\n\nMensagem do usuário: {text}",
+                        gemini_key,
+                        model="gemini-1.5-flash",
+                        image_data=image_data
+                    )
+                    self._history.append({"role": "assistant", "content": response})
+                    parsed = parse_ai_response(response)
+                    self.after(0, lambda: self._handle_ai_response(parsed))
+                    return
+                except Exception as e:
+                    self.after(0, lambda: self._append_message("ErosGest AI", f"Erro no Gemini: {str(e)}", "assistant"))
+                    return
+            
+            # Usa OpenAI se não tiver imagem ou Gemini
+            api_key = self.api_entry.get().strip() or openai_key
             self._history.append({"role": "user", "content": text})
 
-            if not api_key:
+            if not api_key and not gemini_key:
                 result = parse_product_from_text(text)
                 if result["success"]:
                     d = result["data"]
                     resp = (f"Identificado: {d['name']} — {d['quantity']} {d['unit']} "
                             f"a R${d['cost_price']:.2f}\n"
-                            f"Configure sua OpenAI API Key para respostas completas.")
+                            f"Configure sua API Key (OpenAI ou Google Gemini) para respostas completas.")
                 else:
-                    resp = "Configure sua OpenAI API Key em ⚙️ Configurações para usar o assistente."
+                    resp = "Configure sua API Key em ⚙️ Configurações para usar o assistente."
                 self.after(0, lambda r=resp: self._append_message("ErosGest AI", r, "assistant"))
+                return
+
+            # Tenta Gemini primeiro se não tiver OpenAI
+            if not api_key and gemini_key and not image_data:
+                try:
+                    response = call_gemini_chat(
+                        f"{system_prompt}\n\nMensagem do usuário: {text}",
+                        gemini_key,
+                        model="gemini-1.5-flash"
+                    )
+                    self._history.append({"role": "assistant", "content": response})
+                    parsed = parse_ai_response(response)
+                    self.after(0, lambda: self._handle_ai_response(parsed))
+                    return
+                except Exception as e:
+                    self.after(0, lambda: self._append_message("ErosGest AI", f"Erro no Gemini: {str(e)}", "assistant"))
+                    return
+
+            if not api_key:
+                self.after(0, lambda: self._append_message("ErosGest AI", 
+                    "Configure sua OpenAI API Key ou Google Gemini API Key em ⚙️ Configurações.", "assistant"))
                 return
 
             response = call_openai_chat(
@@ -1378,6 +1421,7 @@ class SettingsTab(tk.Frame):
             ("🔑 API Keys", [
                 ("openai_api_key", "OpenAI API Key (sk-...)"),
                 ("serpapi_key", "SerpAPI Key (busca de preços)"),
+                ("gemini_api_key", "Google Gemini API Key (Gratuito)"),
                 ("assemblyai_key", "AssemblyAI Key (transcrição de voz)"),
             ]),
             ("⚙️ Sistema", [
